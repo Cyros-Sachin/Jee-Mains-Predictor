@@ -27,7 +27,7 @@ const PredictorForm = () => {
     console.log('Submitted inputs:', inputs);
     e.preventDefault();
     try {
-      const res = await axios.post('http://localhost:5000/api/predict', inputs);
+      const res = await axios.post('https://backend-efcc.onrender.com/api/predict', inputs);
       console.log('Backend response:', res.data);
 
       setResults(res.data.all || []);
