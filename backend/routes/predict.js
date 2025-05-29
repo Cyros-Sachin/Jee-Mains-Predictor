@@ -1,51 +1,43 @@
 const express = require('express');
 const csv = require('csv-parser');
-const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
 
 const router = express.Router();
 
 let josaaData = [], csabData = [];
+let csvLoaded = false;
 
 /**
- * Load CSV data from a public URL and push into dataset array
+ * Load CSV data from local file path into dataset array
  */
-function loadCSVFromURL(url, dataset) {
-  return fetch(url)
-    .then(res => {
-      if (!res.ok) throw new Error(`Failed to fetch CSV: ${url}`);
-      return res.body;
-    })
-    .then(stream =>
-      new Promise((resolve, reject) => {
-        stream
-          .pipe(csv({
-            mapHeaders: ({ header }) =>
-              header.replace(/^\uFEFF/, '').replace(/^"+|"+$/g, '')
-          }))
-          .on('data', row => {
-            dataset.push({
-              ...row,
-              source: url.includes('josaa') ? 'JOSAA' : 'CSAB',
-            });
-          })
-          .on('end', resolve)
-          .on('error', reject);
+function loadCSVFromFile(filePath, dataset) {
+  return new Promise((resolve, reject) => {
+    fs.createReadStream(filePath)
+      .pipe(csv({
+        mapHeaders: ({ header }) => header.replace(/^\uFEFF/, '').replace(/^"+|"+$/g, '')
+      }))
+      .on('data', row => {
+        dataset.push({
+          ...row,
+          source: filePath.includes('josaa') ? 'JOSAA' : 'CSAB',
+        });
       })
-    );
+      .on('end', resolve)
+      .on('error', reject);
+  });
 }
 
 /**
- * Middleware to ensure CSV data is loaded dynamically on first request
+ * Middleware to ensure CSV data is loaded once before first request
  */
-let csvLoaded = false;
 async function ensureCSVDataLoaded(req, res, next) {
   if (csvLoaded) return next();
 
-  const baseUrl = `https://${req.headers.host}`;
   try {
     await Promise.all([
-      loadCSVFromURL(`${baseUrl}/csab_cutoffs_2024.csv`, csabData),
-      loadCSVFromURL(`${baseUrl}/josaa_cutoffs_2024.csv`, josaaData)
+      loadCSVFromFile(path.join(__dirname, '../public/csab_cutoffs_2024.csv'), csabData),
+      loadCSVFromFile(path.join(__dirname, '../public/josaa_cutoffs_2024.csv'), josaaData),
     ]);
     csvLoaded = true;
     console.log('CSV data loaded successfully');
@@ -57,7 +49,7 @@ async function ensureCSVDataLoaded(req, res, next) {
 }
 
 /**
- * Filter colleges based on input
+ * Filter colleges based on criteria
  */
 function getEligibleColleges(rank, category, quota, gender, branchPreference, dataset) {
   return dataset.filter(entry => {
