@@ -131,6 +131,9 @@ const PredictorForm = () => {
           </button>
         </div>
       )}
+      <footer className="mt-10 text-center text-sm text-gray-500">
+        Made with ❤️ by <span className="font-semibold text-gray-700">Kumar Sachin</span>
+      </footer>
     </div>
   );
 };
