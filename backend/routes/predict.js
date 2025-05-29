@@ -1,35 +1,64 @@
 const express = require('express');
-const fs = require('fs');
 const csv = require('csv-parser');
+const fetch = require('node-fetch');
+
 const router = express.Router();
 
 let josaaData = [], csabData = [];
 
-function loadCSVData(filePath, dataset) {
-  return new Promise((resolve, reject) => {
-    fs.createReadStream(filePath)
-      .pipe(csv({
-        mapHeaders: ({ header }) =>
-          header.replace(/^\uFEFF/, '').replace(/^"+|"+$/g, '') // 💥 remove BOM and " from headers
-      }))
-      .on('data', row => {
-        dataset.push({ ...row, source: filePath.includes('josaa') ? 'JOSAA' : 'CSAB' });
+/**
+ * Load CSV data from a public URL and push into dataset array
+ */
+function loadCSVFromURL(url, dataset) {
+  return fetch(url)
+    .then(res => {
+      if (!res.ok) throw new Error(`Failed to fetch CSV: ${url}`);
+      return res.body;
+    })
+    .then(stream =>
+      new Promise((resolve, reject) => {
+        stream
+          .pipe(csv({
+            mapHeaders: ({ header }) =>
+              header.replace(/^\uFEFF/, '').replace(/^"+|"+$/g, '')
+          }))
+          .on('data', row => {
+            dataset.push({
+              ...row,
+              source: url.includes('josaa') ? 'JOSAA' : 'CSAB',
+            });
+          })
+          .on('end', resolve)
+          .on('error', reject);
       })
-      .on('end', resolve)
-      .on('error', reject);
-  });
+    );
 }
 
+/**
+ * Middleware to ensure CSV data is loaded dynamically on first request
+ */
+let csvLoaded = false;
+async function ensureCSVDataLoaded(req, res, next) {
+  if (csvLoaded) return next();
 
+  const baseUrl = `https://${req.headers.host}`;
+  try {
+    await Promise.all([
+      loadCSVFromURL(`${baseUrl}/csab_cutoffs_2024.csv`, csabData),
+      loadCSVFromURL(`${baseUrl}/josaa_cutoffs_2024.csv`, josaaData)
+    ]);
+    csvLoaded = true;
+    console.log('CSV data loaded successfully');
+    next();
+  } catch (err) {
+    console.error('Error loading CSV data:', err);
+    return res.status(500).json({ error: 'Failed to load cutoff data.' });
+  }
+}
 
-// Load JoSAA and CSAB data asynchronously
-Promise.all([
-  loadCSVData('./data/csab_cutoffs_2024.csv', csabData),
-  loadCSVData('./data/josaa_cutoffs_2024.csv', josaaData)
-])
-  .then(() => console.log('CSV data loaded successfully'))
-  .catch(err => console.error('Error loading CSV data:', err));
-
+/**
+ * Filter colleges based on input
+ */
 function getEligibleColleges(rank, category, quota, gender, branchPreference, dataset) {
   return dataset.filter(entry => {
     const closingRank = parseInt(entry['Closing Rank']);
@@ -43,23 +72,19 @@ function getEligibleColleges(rank, category, quota, gender, branchPreference, da
   });
 }
 
-router.post('/', (req, res) => {
+/**
+ * POST /api/predictor
+ */
+router.post('/', ensureCSVDataLoaded, (req, res) => {
   const { rank, category, homeState, gender, branchPreference } = req.body;
   const quota = homeState ? 'HS' : 'OS';
-
-  // Ensure CSV data is loaded before proceeding
-  if (josaaData.length === 0 || csabData.length === 0) {
-    return res.status(500).json({ error: 'Data not loaded yet, please try again shortly.' });
-  }
 
   const josaaMatches = getEligibleColleges(rank, category, quota, gender, branchPreference, josaaData);
   const csabMatches = getEligibleColleges(rank, category, quota, gender, branchPreference, csabData);
 
   const merged = [...josaaMatches, ...csabMatches];
-
-  // Rank them by closing rank
   const ranked = merged.sort((a, b) => parseInt(a['Closing Rank']) - parseInt(b['Closing Rank']));
-  console.log(ranked);
+
   res.json({
     best: ranked[0] || null,
     all: ranked.slice(0, 30),
